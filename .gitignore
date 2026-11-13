@@ -1,0 +1,38 @@
+# Cachés, configuración local y archivos generados
+.gradle/
+.kotlin/
+.idea/
+*.iml
+build/
+.cxx/
+.externalNativeBuild/
+local.properties
+captures/
+
+# Paquetes compilados
+*.apk
+*.aab
+
+# Firebase, firma y archivos locales de credenciales
+google-services.json
+*firebase-adminsdk*.json
+*.jks
+*.keystore
+keystore.properties
+key.properties
+signing.properties
+secrets.properties
+.env
+.env.*
+!.env.example
+
+# Configuración local del firmware
+arduino_secrets.h
+wifi_secrets.h
+detector_tls_secrets.h
+detector_access_key.txt
+/app/src/main/res/raw/detector_cert.pem
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
