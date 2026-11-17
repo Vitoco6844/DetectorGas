@@ -28,8 +28,8 @@ extern "C" {
 #if __has_include("wifi_secrets.h")
 #include "wifi_secrets.h"
 #else
-const char* NOMBRE_RED = "ProyectoGas";
-const char* CLAVE_RED = "ESCRIBE_AQUI_TU_CLAVE";
+const char* NOMBRE_RED = "";
+const char* CLAVE_RED = "";
 #endif
 
 #if __has_include("detector_tls_secrets.h")

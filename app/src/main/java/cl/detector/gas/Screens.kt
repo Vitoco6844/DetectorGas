@@ -272,7 +272,7 @@ internal fun MonitorScreen(
 }
 
 @Composable
-internal fun HistoryScreen(state: ScreenState, onBack: () -> Unit) {
+internal fun HistoryScreen(state: ScreenState, onBack: () -> Unit, onRefresh: () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(
             Modifier.widthIn(max = 520.dp).fillMaxSize(),
@@ -282,6 +282,13 @@ internal fun HistoryScreen(state: ScreenState, onBack: () -> Unit) {
                 Heading("Historial de lecturas", if (state.demo) "Demostración · Datos de ejemplo" else "Últimas 200 lecturas guardadas en este teléfono.")
             }
             item { Action("Volver al monitoreo", primary = true, onClick = onBack) }
+            state.cloudCounts?.let { counts ->
+                item {
+                    Detail("Pendientes de subir · ${counts.pending}")
+                    Detail("Enviadas a Firestore · ${counts.uploaded}")
+                    Action("Actualizar estado de sincronización", onClick = onRefresh)
+                }
+            }
             if (state.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             if (state.error != null) item { ErrorText(state.error) }
             if (!state.busy && state.error == null && state.history.isEmpty()) {

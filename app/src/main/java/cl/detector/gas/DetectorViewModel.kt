@@ -36,6 +36,7 @@ data class ScreenState(
     val busy: Boolean = false,
     val error: String? = null,
     val history: List<SavedReading> = emptyList(),
+    val cloudCounts: CloudCounts? = null,
     val historyWarning: String? = null
 )
 
@@ -73,7 +74,12 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
         if (uid != owner) {
             clearDetector()
             owner = uid
-            if (uid == null) ui.value = ScreenState() else loadConnection(uid)
+            if (uid == null) {
+                ui.value = ScreenState()
+            } else {
+                scheduleHistorySync(getApplication())
+                loadConnection(uid)
+            }
         }
     }
 
@@ -275,6 +281,7 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
         val wifi = source
         monitorJob = viewModelScope.launch {
             var saveRequested = forceStore
+            var retryDelay = 1_000L
             do {
                 val reading = if (demo) DemoDetector.read(demoStatus) else readWifi(wifi)
                 val time = System.currentTimeMillis()
@@ -288,6 +295,7 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
                 ) {
                     try {
                         historyStore.save(account, time, reading)
+                        if (!demo) scheduleHistorySync(getApplication())
                         lastStored = reading
                         lastStoredAt = time
                         ui.update { it.copy(historyWarning = null) }
@@ -298,7 +306,10 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 saveRequested = false
-                if (!demo) delay(1_000)
+                if (!demo) {
+                    retryDelay = nextDetectorDelay(retryDelay, reading.status)
+                    delay(retryDelay)
+                }
             } while (!demo)
         }
     }
@@ -339,11 +350,14 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
         val account = historyOwner() ?: return
         monitorJob?.cancel()
         historyJob?.cancel()
-        ui.update { it.copy(page = Page.HISTORY, busy = true, error = null, history = emptyList()) }
+        val realConnection = !ui.value.demo
+        if (realConnection) scheduleHistorySync(getApplication())
+        ui.update { it.copy(page = Page.HISTORY, busy = true, error = null, history = emptyList(), cloudCounts = null) }
         historyJob = viewModelScope.launch {
             try {
                 val entries = historyStore.latest(account)
-                ui.update { it.copy(history = entries, busy = false) }
+                val counts = if (realConnection) historyStore.cloudCounts(account) else null
+                ui.update { it.copy(history = entries, cloudCounts = counts, busy = false) }
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {

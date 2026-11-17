@@ -4,9 +4,10 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import androidx.room.Room
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.nio.ByteBuffer
 import java.security.KeyStore
 import java.security.MessageDigest
 import javax.crypto.Cipher
@@ -17,7 +18,14 @@ import javax.crypto.spec.GCMParameterSpec
 data class SavedReading(val id: Long, val receivedAt: Long, val reading: Reading)
 
 internal class HistoryStore(context: Context) {
-    private val database = Room.databaseBuilder(context, HistoryDatabase::class.java, "detector.db").build()
+    private val database = Room.databaseBuilder(context, HistoryDatabase::class.java, "detector.db")
+        .addMigrations(object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE readings ADD COLUMN uploaded INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("CREATE INDEX index_readings_owner_uploaded_id ON readings (owner, uploaded, id)")
+            }
+        })
+        .build()
     private val key: SecretKey by lazy {
         val alias = "detector-history-v1"
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
@@ -57,6 +65,20 @@ internal class HistoryStore(context: Context) {
             SavedReading(row.id, time.toLong(), Reading(DetectorStatus.valueOf(status), adc.toInt(), fan.toBooleanStrictOrNull()))
         }
     }
+
+    suspend fun cloudCounts(owner: String): CloudCounts = withContext(Dispatchers.IO) {
+        database.history().cloudCounts(ownerHash(owner))
+    }
+
+    suspend fun pending(owner: String): List<HistoryRow> = withContext(Dispatchers.IO) {
+        database.history().pending(ownerHash(owner))
+    }
+
+    suspend fun acknowledge(owner: String, ids: List<Long>) = withContext(Dispatchers.IO) {
+        database.history().markUploaded(ownerHash(owner), ids)
+    }
+
+    fun close() = database.close()
 
     private fun ownerHash(owner: String): String = MessageDigest.getInstance("SHA-256")
         .digest(owner.encodeToByteArray()).joinToString("") { "%02x".format(it.toInt() and 0xff) }

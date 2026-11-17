@@ -94,7 +94,7 @@ private fun DetectorApp(activity: ComponentActivity, model: DetectorViewModel = 
                         model::startDemo, model::chooseDemoStatus
                     )
                 }
-                Page.HISTORY -> HistoryScreen(state, model::backToMonitor)
+                Page.HISTORY -> HistoryScreen(state, model::backToMonitor, model::showHistory)
             }
         }
     }

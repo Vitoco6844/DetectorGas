@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid}/readings/{reading} {
+      function ownsHistory() {
+        return request.auth != null && request.auth.uid == uid;
+      }
+
+      function validEncryptedReading() {
+        let fields = request.resource.data;
+        return reading.matches('^[0-9a-f]{64}$')
+          && fields.keys().hasAll(['payload', 'nonce'])
+          && fields.keys().hasOnly(['payload', 'nonce'])
+          && fields.payload is bytes
+          && fields.payload.size() >= 16
+          && fields.payload.size() <= 1024
+          && fields.nonce is bytes
+          && fields.nonce.size() == 12;
+      }
+
+      allow read: if ownsHistory();
+      allow create: if ownsHistory() && validEncryptedReading();
+      allow update: if ownsHistory()
+        && validEncryptedReading()
+        && request.resource.data == resource.data;
+    }
+  }
+}
