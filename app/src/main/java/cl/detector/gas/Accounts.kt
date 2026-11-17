@@ -10,20 +10,54 @@ import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.GoogleAuthProvider
 import kotlinx.coroutines.tasks.await
+
+internal class LocalLoginException(message: String) : Exception(message)
 
 internal class Accounts(private val context: Context) {
     val auth: FirebaseAuth? = FirebaseApp.getApps(context).firstOrNull()
         ?.let { FirebaseAuth.getInstance(it) }
     private val manager = CredentialManager.create(context)
+    private val preferences = context.getSharedPreferences("login_attempts", Context.MODE_PRIVATE)
+    private val loginGuard = LoginGuard(
+        read = { email ->
+            LoginAttempts(preferences.getInt("failures:$email", 0), preferences.getLong("retry:$email", 0))
+        },
+        write = { email, state ->
+            if (!preferences.edit()
+                    .putInt("failures:$email", state.failures)
+                    .putLong("retry:$email", state.retryAt)
+                    .commit()
+            ) throw LocalLoginException("No se pudo guardar el estado de los intentos en este teléfono.")
+        },
+        remove = { email ->
+            preferences.edit().remove("failures:$email").remove("retry:$email").apply()
+        }
+    )
 
     suspend fun signIn(email: String, password: String) {
-        requireNotNull(auth).signInWithEmailAndPassword(email, password).await()
+        checkLocalAccess(email)
+        try {
+            requireNotNull(auth).signInWithEmailAndPassword(email, password).await()
+        } catch (error: FirebaseAuthInvalidCredentialsException) {
+            if (!countsAsInvalidPassword(error.errorCode)) throw error
+            val now = System.currentTimeMillis()
+            val attempts = loginGuard.recordInvalidPassword(email, now)
+            val remaining = attempts.passwordAttemptsRemaining
+            val remainingText = if (remaining == 1) "Te queda 1 intento." else "Te quedan $remaining intentos."
+            throw LocalLoginException(
+                attempts.blockedMessage(now) ?: "Revisa el correo y la contraseña. $remainingText"
+            )
+        }
+        loginGuard.clear(email)
     }
 
     suspend fun register(email: String, password: String) {
+        checkLocalAccess(email)
         requireNotNull(auth).createUserWithEmailAndPassword(email, password).await()
+        loginGuard.clear(email)
     }
 
     suspend fun recover(email: String) {
@@ -37,8 +71,26 @@ internal class Accounts(private val context: Context) {
         val request = GetCredentialRequest.Builder().addCredentialOption(option).build()
         val credential = manager.getCredential(activity, request).credential
         check(credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL)
-        val token = GoogleIdTokenCredential.createFrom(credential.data).idToken
-        requireNotNull(auth).signInWithCredential(GoogleAuthProvider.getCredential(token, null)).await()
+        val googleAccount = GoogleIdTokenCredential.createFrom(credential.data)
+        checkLocalAccess(googleAccount.id)
+        val firebaseAuth = requireNotNull(auth)
+        val result = firebaseAuth.signInWithCredential(
+            GoogleAuthProvider.getCredential(googleAccount.idToken, null)
+        ).await()
+        val email = result.user?.email ?: googleAccount.id
+        val blocked = localBlockMessage(email)
+        if (blocked != null) {
+            firebaseAuth.signOut()
+            throw LocalLoginException(blocked)
+        }
+        loginGuard.clear(email)
+    }
+
+    fun localBlockMessage(email: String): String? =
+        loginGuard.state(email).blockedMessage(System.currentTimeMillis())
+
+    private fun checkLocalAccess(email: String) {
+        localBlockMessage(email)?.let { throw LocalLoginException(it) }
     }
 
     suspend fun signOut() {

@@ -8,6 +8,7 @@ import androidx.credentials.exceptions.NoCredentialException
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.firebase.FirebaseNetworkException
+import com.google.firebase.FirebaseTooManyRequestsException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthUserCollisionException
@@ -52,7 +53,16 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
     private var lastStoredAt = 0L
 
     private val authListener = FirebaseAuth.AuthStateListener { auth ->
-        val uid = auth.currentUser?.uid
+        val user = auth.currentUser
+        val blocked = user?.email?.let(accounts::localBlockMessage)
+        if (blocked != null) {
+            clearDetector()
+            owner = null
+            ui.value = ScreenState(error = blocked)
+            auth.signOut()
+            return@AuthStateListener
+        }
+        val uid = user?.uid
         if (!ui.value.demo && uid != owner) {
             clearDetector()
             owner = uid
@@ -117,7 +127,9 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
                 // La persona cerró el selector de cuentas.
             } catch (error: Exception) {
                 val message = when (error) {
+                    is LocalLoginException -> error.message
                     is FirebaseNetworkException -> "Comprueba tu conexión a Internet e inténtalo otra vez."
+                    is FirebaseTooManyRequestsException -> "Firebase recibió demasiadas solicitudes. Inténtalo más tarde."
                     is FirebaseAuthUserCollisionException -> "Este correo ya tiene una cuenta."
                     is FirebaseAuthInvalidCredentialsException -> "Revisa el correo y la contraseña."
                     is NoCredentialException -> "Agrega una cuenta de Google al teléfono o inicia sesión por correo."
