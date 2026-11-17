@@ -5,6 +5,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DetectorTest {
+    @Test fun savesConfigurationOnlyAfterAnAuthenticatedDetectorResponse() {
+        val configuration = DetectorConnection(" 192.168.1.50 ", "0123456789abcdef0123456789ABCDEF")
+        assertEquals("192.168.1.50", configuration.address)
+        assertEquals("0123456789abcdef0123456789abcdef", configuration.accessKey)
+        for (status in DetectorStatus.entries) {
+            val accepted = Reading(status).confirmsDetectorConnection()
+            assertEquals(status in listOf(
+                DetectorStatus.NORMAL, DetectorStatus.ALERT, DetectorStatus.TEST,
+                DetectorStatus.WARMING, DetectorStatus.NO_DATA
+            ), accepted)
+        }
+    }
+
     @Test fun compatibleWithCurrentFirmware() {
         val reading = parse("""{"lectura":95,"estado":"sin_alerta","conexion_arduino":true,"unidad":"ADC_0_1023"}""")
         assertEquals(DetectorStatus.NORMAL, reading.status)

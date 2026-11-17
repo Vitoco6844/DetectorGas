@@ -59,8 +59,8 @@ private fun DetectorApp(activity: ComponentActivity, model: DetectorViewModel = 
         if (!state.busy || state.page == Page.HISTORY) {
             when (state.page) {
                 Page.HISTORY -> model.backToMonitor()
-                Page.MONITOR -> model.connectionPage()
-                Page.CONNECTION -> model.signOut()
+                Page.MONITOR -> model.leaveMonitor()
+                Page.CONNECTION -> if (state.demo) model.leaveDemo() else model.signOut()
                 else -> model.authPage(Page.LOGIN)
             }
         }
@@ -77,16 +77,21 @@ private fun DetectorApp(activity: ComponentActivity, model: DetectorViewModel = 
                     onGoogle = { model.google(activity) },
                     onDemo = model::startDemo
                 )
-                Page.CONNECTION -> ConnectionScreen(state, model::connect, model::signOut)
+                Page.CONNECTION -> ConnectionScreen(
+                    state, model::connect, model::startDemo,
+                    if (state.demo) model::leaveDemo else model::signOut
+                )
                 Page.MONITOR -> {
-                    LifecycleResumeEffect(model) {
+                    LifecycleResumeEffect(model, state.demo) {
                         model.setMonitorVisible(true)
                         onPauseOrDispose { model.setMonitorVisible(false) }
                     }
                     AlertSound(state.reading?.status == DetectorStatus.ALERT)
                     MonitorScreen(
                         state, { model.refresh() }, model::connectionPage,
-                        model::showHistory, model::signOut, model::chooseDemoStatus
+                        model::showHistory,
+                        if (state.demo) model::leaveDemo else model::signOut,
+                        model::startDemo, model::chooseDemoStatus
                     )
                 }
                 Page.HISTORY -> HistoryScreen(state, model::backToMonitor)

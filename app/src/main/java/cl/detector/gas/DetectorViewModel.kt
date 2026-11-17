@@ -28,6 +28,9 @@ data class ScreenState(
     val page: Page = Page.LOGIN,
     val demo: Boolean = false,
     val address: String = "",
+    val savedAccessKey: String = "",
+    val loadingConnection: Boolean = false,
+    val signedIn: Boolean = false,
     val reading: Reading? = null,
     val receivedAt: Long? = null,
     val busy: Boolean = false,
@@ -39,6 +42,7 @@ data class ScreenState(
 class DetectorViewModel(app: Application) : AndroidViewModel(app) {
     private val accounts = Accounts(app)
     private val historyStore = HistoryStore(app)
+    private val connectionStore = DetectorConnectionStore(app)
     private val ui = MutableStateFlow(ScreenState())
     val state = ui.asStateFlow()
     val firebaseReady = accounts.auth != null
@@ -47,6 +51,8 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
     private var source: WifiDetector? = null
     private var monitorJob: Job? = null
     private var historyJob: Job? = null
+    private var configurationJob: Job? = null
+    private var pendingConnection: DetectorConnection? = null
     private var monitorVisible = false
     private var demoStatus = DetectorStatus.NORMAL
     private var lastStored: Reading? = null
@@ -63,10 +69,11 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
             return@AuthStateListener
         }
         val uid = user?.uid
-        if (!ui.value.demo && uid != owner) {
+        if (uid == null && owner == "demo-local") return@AuthStateListener
+        if (uid != owner) {
             clearDetector()
             owner = uid
-            ui.value = ScreenState(page = if (uid == null) Page.LOGIN else Page.CONNECTION)
+            if (uid == null) ui.value = ScreenState() else loadConnection(uid)
         }
     }
 
@@ -144,15 +151,35 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun startDemo() {
-        if (!BuildConfig.DEBUG || ui.value.busy) return
+        val current = ui.value
+        if (current.busy || current.demo || (!current.signedIn && !BuildConfig.DEBUG)) return
         clearDetector()
-        owner = "demo-local"
+        if (!current.signedIn) owner = "demo-local"
         demoStatus = DetectorStatus.NORMAL
-        ui.value = ScreenState(page = Page.CONNECTION, demo = true)
+        ui.value = ScreenState(
+            page = if (current.signedIn) Page.MONITOR else Page.CONNECTION,
+            demo = true,
+            signedIn = current.signedIn
+        )
+    }
+
+    fun leaveMonitor() {
+        if (ui.value.demo && ui.value.signedIn) leaveDemo() else connectionPage()
+    }
+
+    fun leaveDemo() {
+        val account = owner ?: return
+        clearDetector()
+        if (ui.value.signedIn) {
+            loadConnection(account)
+        } else {
+            owner = null
+            ui.value = ScreenState()
+        }
     }
 
     fun signOut() {
-        val demo = ui.value.demo
+        val demo = ui.value.demo && !ui.value.signedIn
         clearDetector()
         owner = null
         ui.value = ScreenState()
@@ -170,7 +197,7 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun connect(address: String, accessKey: String) {
-        if (owner == null) return
+        if (owner == null || ui.value.loadingConnection || ui.value.page != Page.CONNECTION) return
         if (!ui.value.demo) {
             val app = getApplication<Application>()
             val certificate = app.resources.getIdentifier("detector_cert", "raw", app.packageName)
@@ -179,11 +206,13 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
                 return
             }
             try {
-                val url = detectorUrl(address)
-                val authorization = detectorAuthorization(accessKey)
+                val configuration = DetectorConnection(address, accessKey)
+                val url = detectorUrl(configuration.address)
+                val authorization = detectorAuthorization(configuration.accessKey)
                 source = app.resources.openRawResource(certificate).use {
                     WifiDetector(url, authorization, it)
                 }
+                pendingConnection = configuration
             } catch (_: IllegalArgumentException) {
                 ui.update { it.copy(error = "Escribe la IP privada del detector y su clave de 32 caracteres.") }
                 return
@@ -192,13 +221,33 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
                 return
             }
         }
-        ui.update { it.copy(page = Page.MONITOR, address = address.trim(), reading = null, receivedAt = null, error = null) }
+        ui.update {
+            it.copy(page = Page.MONITOR, address = pendingConnection?.address.orEmpty(), savedAccessKey = "",
+                reading = null, receivedAt = null, error = null)
+        }
     }
 
     fun connectionPage() {
         clearDetector()
-        ui.update {
-            it.copy(page = Page.CONNECTION, reading = null, receivedAt = null, error = null, history = emptyList())
+        if (ui.value.demo) {
+            ui.value = ScreenState(page = Page.CONNECTION, demo = true)
+        } else {
+            owner?.let(::loadConnection)
+        }
+    }
+
+    private fun loadConnection(uid: String) {
+        ui.value = ScreenState(page = Page.CONNECTION, signedIn = true, loadingConnection = true)
+        configurationJob = viewModelScope.launch {
+            try {
+                val saved = connectionStore.load(uid)
+                ui.update { it.copy(address = saved?.address.orEmpty(), savedAccessKey = saved?.accessKey.orEmpty()) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                ui.update { it.copy(error = "No se pudo recuperar la conexión guardada. Ingresa los datos otra vez.") }
+            }
+            ui.update { it.copy(loadingConnection = false) }
         }
     }
 
@@ -219,7 +268,7 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refresh(forceStore: Boolean = true) {
-        val account = owner ?: return
+        val account = historyOwner() ?: return
         if (!monitorVisible || ui.value.page != Page.MONITOR) return
         monitorJob?.cancel()
         val demo = ui.value.demo
@@ -232,6 +281,7 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
                 ui.update {
                     it.copy(reading = reading, receivedAt = time.takeIf { reading.adc != null })
                 }
+                if (reading.confirmsDetectorConnection()) savePendingConnection(account)
                 if (reading.adc != null && (saveRequested ||
                         reading.status != lastStored?.status || reading.fanOrdered != lastStored?.fanOrdered ||
                         time - lastStoredAt >= 30_000L)
@@ -253,6 +303,22 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private suspend fun savePendingConnection(account: String) {
+        val pending = pendingConnection ?: return
+        try {
+            connectionStore.save(account, pending)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            ui.update { it.copy(error = "El detector responde, pero no se pudo guardar su conexión.") }
+        }
+        pendingConnection = null
+    }
+
+    private fun historyOwner(): String? = owner?.let { uid ->
+        if (ui.value.demo && ui.value.signedIn) "demo:$uid" else uid
+    }
+
     private suspend fun readWifi(wifi: WifiDetector?): Reading = try {
         requireNotNull(wifi).read()
     } catch (error: CancellationException) {
@@ -270,7 +336,7 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun showHistory() {
-        val account = owner ?: return
+        val account = historyOwner() ?: return
         monitorJob?.cancel()
         historyJob?.cancel()
         ui.update { it.copy(page = Page.HISTORY, busy = true, error = null, history = emptyList()) }
@@ -296,6 +362,8 @@ class DetectorViewModel(app: Application) : AndroidViewModel(app) {
     private fun clearDetector() {
         monitorJob?.cancel()
         historyJob?.cancel()
+        configurationJob?.cancel()
+        pendingConnection = null
         source = null
         lastStored = null
         lastStoredAt = 0

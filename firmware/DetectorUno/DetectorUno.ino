@@ -47,7 +47,7 @@ const int UMBRAL_RETORNO = 450;
 // NO garantiza la estabilización ni sustituye el
 // acondicionamiento indicado por el fabricante.
 // Para una prueba rápida SOLO EN WOKWI, puede ponerse 0UL.
-const unsigned long ESPERA_INICIAL_MS = 180000UL;
+const unsigned long ESPERA_INICIAL_MS = 0UL;
 
 // Intervalo entre lecturas: 250 ms = cuatro lecturas por segundo.
 const unsigned long INTERVALO_LECTURA_MS = 250UL;

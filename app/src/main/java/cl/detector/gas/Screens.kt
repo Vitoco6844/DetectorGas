@@ -153,9 +153,14 @@ private fun PasswordField(label: String, value: String, enabled: Boolean, onChan
 }
 
 @Composable
-internal fun ConnectionScreen(state: ScreenState, onConnect: (String, String) -> Unit, onExit: () -> Unit) {
-    var address by rememberSaveable { mutableStateOf(state.address) }
-    var accessKey by remember { mutableStateOf("") }
+internal fun ConnectionScreen(
+    state: ScreenState,
+    onConnect: (String, String) -> Unit,
+    onDemo: () -> Unit,
+    onExit: () -> Unit
+) {
+    var address by rememberSaveable(state.address) { mutableStateOf(state.address) }
+    var accessKey by remember(state.savedAccessKey) { mutableStateOf(state.savedAccessKey) }
     Screen {
         Heading(
             "Conecta tu detector",
@@ -164,18 +169,22 @@ internal fun ConnectionScreen(state: ScreenState, onConnect: (String, String) ->
         )
         if (!state.demo) {
             OutlinedTextField(
-                value = address, onValueChange = { address = it },
+                value = address, onValueChange = { address = it }, enabled = !state.loadingConnection,
                 modifier = Modifier.fillMaxWidth(), label = { Text("Dirección del detector") },
                 placeholder = { Text("192.168.1.50") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 singleLine = true, shape = actionShape
             )
             Detail("Busca la dirección que muestra el ESP32 al conectarse al Wi-Fi.")
-            PasswordField("Clave de acceso del detector", accessKey, true) { accessKey = it }
-            Detail("Usa la clave generada al configurar HTTPS.")
+            PasswordField("Clave de acceso del detector", accessKey, !state.loadingConnection) { accessKey = it }
+            if (state.savedAccessKey.isNotEmpty()) Detail("Conexión guardada en este teléfono.")
+            else Detail("Usa la clave generada al configurar HTTPS.")
         }
         ErrorText(state.error)
-        Action(if (state.demo) "Conectar simulador" else "Conectar", primary = true) { onConnect(address, accessKey) }
+        Action(if (state.demo) "Conectar simulador" else "Conectar", primary = true, enabled = !state.loadingConnection) {
+            onConnect(address, accessKey)
+        }
+        if (state.signedIn) Action("Abrir demostración", onClick = onDemo)
         Action(if (state.demo) "Salir de la demostración" else "Cerrar sesión", onClick = onExit)
     }
 }
@@ -208,6 +217,7 @@ internal fun MonitorScreen(
     onSettings: () -> Unit,
     onHistory: () -> Unit,
     onExit: () -> Unit,
+    onDemo: () -> Unit,
     onDemoStatus: (DetectorStatus) -> Unit
 ) {
     val reading = state.reading
@@ -234,12 +244,14 @@ internal fun MonitorScreen(
         Text("Orden del ventilador · ${fanText(reading?.fanOrdered)}", fontWeight = FontWeight.SemiBold)
         state.receivedAt?.let { Detail("Última lectura · ${timeLabel(it)}") }
         ErrorText(state.historyWarning)
+        ErrorText(state.error)
         Action(
             if (reading?.adc == null && reading != null) "Reintentar" else "Actualizar lectura",
             primary = true, onClick = onRefresh
         )
         Action("Consultar historial", onClick = onHistory)
-        Action("Configurar conexión", onClick = onSettings)
+        if (!state.demo || !state.signedIn) Action("Configurar conexión", onClick = onSettings)
+        if (state.signedIn && !state.demo) Action("Abrir demostración", onClick = onDemo)
         Action(if (state.demo) "Salir de la demostración" else "Cerrar sesión", onClick = onExit)
         if (state.demo) {
             HorizontalDivider()
